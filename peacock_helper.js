@@ -21,7 +21,6 @@ hostname = *.peacocktv.com, *.mediatailor.*.amazonaw.com
 ^https:\/\/.*?\.mediatailor\..*?\.amazonaws\.com\/v\d+\/manifest\/\w+\/peacock\-cmaf\-hls\-vod.*?\/\d+\.m3u8 url script-response-body https://raw.githubusercontent.com/liunice/PeacockHelper/master/peacock_helper.js
 
 # 外挂srt字幕 (外挂字幕方法请参见github主页)
-^https:\/\/atom\.peacocktv\.com\/adapter\-calypso\/v\d+\/query\/node.*?represent=\(items\) url script-response-body https://raw.githubusercontent.com/liunice/PeacockHelper/master/peacock_helper.js
 ^https:\/\/atom\.peacocktv\.com\/adapter\-calypso\/v\d+\/query\/node/.*?\?represent=\(next url script-response-header https://raw.githubusercontent.com/liunice/PeacockHelper/master/peacock_helper.js
 ^https:\/\/.*?\.cdn\.peacocktv\.com\/.*?\.webvtt$ url script-response-body https://raw.githubusercontent.com/liunice/PeacockHelper/master/peacock_helper.js
 
@@ -33,25 +32,32 @@ hostname = *.peacocktv.com, *.mediatailor.*.amazonaw.com
     const $ = Env("peacock_helper.js")
     const SCRIPT_NAME = 'PeacockHelper'
     const SUBTITLES_DIR = 'Subtitles'
-    const FILENAME_TV_DB = 'DO_NOT_DELETE_peacock_tv.db'
-    const TV_DB_THIN_DAYS = 3
 
-    if (/\/adapter\-calypso\/v\d+\/query\/node.*?represent=\(items\)/.test($request.url)) {
+    if (/\/adapter\-calypso\/v\d+\/query\/node\/([\w\-]+)\?represent=\(next/.test($request.url)) {
         const root = JSON.parse($response.body)
-        saveEpisodes(root.relationships.items.data)
-        $.done({})
-    }
-    else if (/\/adapter\-calypso\/v\d+\/query\/node\/([\w\-]+)\?represent=\(next/.test($request.url)) {
-        const episode_id = /\/adapter\-calypso\/v\d+\/query\/node\/([\w\-]+)\?represent=/.exec($request.url)[1]
-        $.log('playing episode: ' + episode_id)
-        checkPlayingEpisode(episode_id)
+        if (root['attributes']['seriesName']) {
+            const series_name = root['attributes']['seriesName']
+            const season = root['attributes']['seasonNumber'].toString().padStart(2, '0')
+            const episode = root['attributes']['episodeNumber'].toString().padStart(2, '0')
+            $.setdata(series_name, `series_name@${SCRIPT_NAME}`)
+            $.setdata(season, `season_no@${SCRIPT_NAME}`)
+            $.setdata(episode, `ep_no@${SCRIPT_NAME}`)
 
-        var newHeaders = $response.headers
+            $.log('playing episode: ' + root.id)
+            notify(SCRIPT_NAME, '正在播放剧集', `[${series_name}] S${season}E${episode}`)
+        }
+        else {
+            $.setdata('', `series_name@${SCRIPT_NAME}`)
+            $.setdata('', `season_no@${SCRIPT_NAME}`)
+            $.setdata('', `ep_no@${SCRIPT_NAME}`)
+        }
+
+        let newHeaders = $response.headers
         delete newHeaders['ETag']
         delete newHeaders['Cache-Control']
         delete newHeaders['Expires']
         delete newHeaders['Date']
-        $.done({ status: $.isQuanX() ? 'HTTP/1.1 200 OK' : 200, headers: newHeaders })
+        $.done({ headers: newHeaders, body: $response.body })
     }
     else if (/\.cdn\.peacocktv\.com\/.*?\.webvtt$/.test($request.url)) {
         if (!checkSubtitleExists()) {
@@ -108,66 +114,6 @@ hostname = *.peacocktv.com, *.mediatailor.*.amazonaw.com
         }
 
         $.done({ body: body })
-    }
-
-    function readTVDB() {
-        let root
-        try {
-            const body = readICloud(`${SUBTITLES_DIR}/${FILENAME_TV_DB}`)
-            if (body) {
-                root = JSON.parse(body)
-            }
-        }
-        catch (e) {
-            $.log(e)
-        }
-        return root || {}
-    }
-
-    function writeTVDB(data) {
-        // remove old entries, make db file smaller
-        const interval = 1000 * 3600 * 24 * TV_DB_THIN_DAYS
-        const newData = Object.fromEntries(Object.entries(data).filter(
-            ([_, info]) => new Date().getTime() - info[3] < interval)
-        )
-
-        // write to iCloud
-        const path = `${SUBTITLES_DIR}/${FILENAME_TV_DB}`
-        const buffer = new TextEncoder().encode(JSON.stringify(newData))
-        if (!$iCloud.writeFile(buffer, path)) {
-            console.log(`iCloud file write failed, path: ${path}`)
-        }
-    }
-
-    function checkPlayingEpisode(episode_id) {
-        const root = readTVDB()
-        const item = root[episode_id]
-        if (item) {
-            $.setdata(item[0], `series_name@${SCRIPT_NAME}`)
-            $.setdata(item[1], `season_no@${SCRIPT_NAME}`)
-            $.setdata(item[2], `ep_no@${SCRIPT_NAME}`)
-            notify(SCRIPT_NAME, '正在播放剧集', `[${item[0]}] S${item[1]}E${item[2]}`)
-        }
-        else {
-            $.setdata('', `series_name@${SCRIPT_NAME}`)
-            $.setdata('', `season_no@${SCRIPT_NAME}`)
-            $.setdata('', `ep_no@${SCRIPT_NAME}`)
-        }
-    }
-
-    function saveEpisodes(episodes) {
-        const data = readTVDB()
-        const ts = new Date().getTime()
-        for (const ep of episodes) {
-            const episode_id = ep['id']
-            const series_name = ep['attributes']['seriesName']
-            const season = ep['attributes']['seasonNumber'].toString().padStart(2, '0')
-            const episode = ep['attributes']['episodeNumber'].toString().padStart(2, '0')
-            data[episode_id] = [series_name, season, episode, ts]
-        }
-
-        writeTVDB(data)
-        $.log(`${episodes.length} episode(s) saved to db`)
     }
 
     function notify(title, subtitle, message) {

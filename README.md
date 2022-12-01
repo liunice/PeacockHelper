@@ -32,8 +32,7 @@ hostname = *.mediatailor.*.amazonaw.com
   ```
   hostname = *.peacocktv.com
 
-  # 外挂字幕 *.peacocktv.com  
-  ^https:\/\/atom\.peacocktv\.com\/adapter\-calypso\/v\d+\/query\/node.*?represent=\(items\) url script-response-body https://raw.githubusercontent.com/liunice/PeacockHelper/master/peacock_helper.js
+  # 外挂字幕 *.peacocktv.com
   ^https:\/\/atom\.peacocktv\.com\/adapter\-calypso\/v\d+\/query\/node/.*?\?represent=\(next url script-response-header https://raw.githubusercontent.com/liunice/PeacockHelper/master/peacock_helper.js
   ^https:\/\/.*?\.cdn\.peacocktv\.com\/.*?\.webvtt$ url script-response-body https://raw.githubusercontent.com/liunice/PeacockHelper/master/peacock_helper.js
   ```
