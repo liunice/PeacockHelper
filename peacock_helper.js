@@ -32,6 +32,7 @@ hostname = *.peacocktv.com, *.mediatailor.*.amazonaw.com
     const $ = Env("peacock_helper.js")
     const SCRIPT_NAME = 'PeacockHelper'
     const SUBTITLES_DIR = 'Subtitles'
+    const FN_SUB_SYNCER_DB = 'sub_syncer.db'
 
     if (/\/adapter\-calypso\/v\d+\/query\/node\/([\w\-]+)\?represent=\(next/.test($request.url)) {
         const root = JSON.parse($response.body)
@@ -45,11 +46,12 @@ hostname = *.peacocktv.com, *.mediatailor.*.amazonaw.com
 
             $.log('playing episode: ' + root.id)
             notify(SCRIPT_NAME, '正在播放剧集', `[${series_name}] S${season}E${episode}`)
+
+            // create subtitle.conf if it's not there
+            createConfFile()
         }
         else {
-            $.setdata('', `series_name@${SCRIPT_NAME}`)
-            $.setdata('', `season_no@${SCRIPT_NAME}`)
-            $.setdata('', `ep_no@${SCRIPT_NAME}`)
+            clearPlaying()
         }
 
         let newHeaders = $response.headers
@@ -101,7 +103,12 @@ hostname = *.peacocktv.com, *.mediatailor.*.amazonaw.com
         if (m) {
             body = body.replace(RegExp(String.raw`#EXT-X-STREAM-INF:FRAME-RATE=[\d\.]+,BANDWIDTH=(?!${maxrate}).*?\s+.+`, 'g'), '')
             $.log(body)
-            // notify(SCRIPT_NAME, `已强制${m[2]}`, `BANDWIDTH=${numberWithCommas(m[1])},CODECS="${m[3]}"`)
+            notify(SCRIPT_NAME, `已强制${m[2]}`, `BANDWIDTH=${numberWithCommas(m[1])},CODECS="${m[3]}"`)
+        }
+
+        // save manifest for sub syncer
+        if (getSubtitleConfig('subsyncer.enabled') == 'true') {
+            writeSubSyncerDB($request.url)
         }
 
         $.done({ body: body })
@@ -123,6 +130,20 @@ hostname = *.peacocktv.com, *.mediatailor.*.amazonaw.com
         }
     }
 
+    function createConfFile() {
+        const series_name = $.getdata(`series_name@${SCRIPT_NAME}`)
+        const season = $.getdata(`season_no@${SCRIPT_NAME}`)
+        if (!series_name) return
+
+        const path = `${SUBTITLES_DIR}/${series_name}/S${season}/subtitle.conf`
+        if (checkICloudExists(path)) return
+
+        const content = `offset=0
+subsyncer.enabled=false
+        `
+        writeICloud(path, content)
+    }
+
     function getSubtitleConfig(key) {
         const series_name = $.getdata(`series_name@${SCRIPT_NAME}`)
         const season = $.getdata(`season_no@${SCRIPT_NAME}`)
@@ -130,13 +151,13 @@ hostname = *.peacocktv.com, *.mediatailor.*.amazonaw.com
         const confBody = readICloud(`${SUBTITLES_DIR}/${series_name}/S${season}/subtitle.conf`)
         if (!confBody) return null
 
-        const m = new RegExp(`^S${season}E${episode}:${key}=(.+)`, 'im').exec(confBody)
+        const m = new RegExp(String.raw`^\s*S${season}E${episode}:${key}\s*=\s*(.+)`, 'im').exec(confBody)
         if (m) {
-            return m[1]
+            return m[1].trim()
         }
         else {
-            const m0 = new RegExp(`^${key}=(.+)`, 'im').exec(confBody)
-            return m0 ? m0[1] : null
+            const m0 = new RegExp(String.raw`^\s*${key}\s*=\s*(.+)`, 'im').exec(confBody)
+            return m0 && m0[1].trim()
         }
     }
 
@@ -144,11 +165,50 @@ hostname = *.peacocktv.com, *.mediatailor.*.amazonaw.com
         const confBody = readICloud(`${SUBTITLES_DIR}/helper.conf`)
         if (!confBody) return null
 
-        const m = new RegExp(`^${key}=(.+)`, 'im').exec(confBody)
-        if (m) {
-            return m[1]
+        const m = new RegExp(String.raw`^\s*${key}\s*=\s*(.+)`, 'im').exec(confBody)
+        return m && m[1].trim()
+    }
+
+    function clearPlaying() {
+        $.setdata('', `series_name@${SCRIPT_NAME}`)
+        $.setdata('', `season_no@${SCRIPT_NAME}`)
+        $.setdata('', `ep_no@${SCRIPT_NAME}`)
+    }
+
+    function writeSubSyncerDB(manifest_url) {
+        const series_name = $.getdata(`series_name@${SCRIPT_NAME}`)
+        const season = $.getdata(`season_no@${SCRIPT_NAME}`)
+        const episode = $.getdata(`ep_no@${SCRIPT_NAME}`)
+        if (!series_name) return
+
+        const path = `${SUBTITLES_DIR}/${series_name}/${FN_SUB_SYNCER_DB}`
+
+        // read
+        let root
+        try {
+            const body = readICloud(path)
+            if (body) {
+                root = JSON.parse(body)
+            }
         }
-        return null
+        catch (e) {
+            $.log(e)
+        }
+        if (!root) {
+            root = { 'manifests': {} }
+        }
+        else if (root['manifests'][`S${season}E${episode}`]) {
+            // 不进行覆盖，防止错误数据写入导致数据混乱
+            return
+        }
+
+        // update
+        root['manifests'][`S${season}E${episode}`] = manifest_url
+
+        // write
+        if (writeICloud(path, JSON.stringify(root))) {
+            notify(SCRIPT_NAME, '播放记录已写入本地数据库', `[${series_name}] S${season}E${episode}`)
+        }
     }
 
     function numberWithCommas(x) {
@@ -184,8 +244,11 @@ hostname = *.peacocktv.com, *.mediatailor.*.amazonaw.com
         const season = $.getdata(`season_no@${SCRIPT_NAME}`)
         const episode = $.getdata(`ep_no@${SCRIPT_NAME}`)
         const path = `${SUBTITLES_DIR}/${series_name}/S${season}/S${season}E${episode}.srt`
-        $.log(path)
-        return checkICloudExists(path)
+        const found = checkICloudExists(path)
+        if (!found) {
+            $.log(`subtitle not exist: ${path}`)
+        }
+        return found
     }
 
     function getSubtitle() {
@@ -206,6 +269,15 @@ hostname = *.peacocktv.com, *.mediatailor.*.amazonaw.com
             const content = new TextDecoder().decode(data)
             return content
         }
+    }
+
+    function writeICloud(path, content) {
+        const buffer = new TextEncoder().encode(content)
+        if (!$iCloud.writeFile(buffer, path)) {
+            console.log(`iCloud file write failed, path: ${path}`)
+            return false
+        }
+        return true
     }
 
     function checkICloudExists(path) {
